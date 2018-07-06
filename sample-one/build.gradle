@@ -1,0 +1,207 @@
+plugins {
+    id 'java'
+}
+
+group 'sample-one'
+version '1.0-SNAPSHOT'
+
+sourceCompatibility = 1.8
+
+repositories {
+    mavenCentral()
+}
+
+dependencies {
+    testCompile group: 'junit', name: 'junit', version: '4.12'
+}
+
+apply plugin: 'com.jfrog.artifactory'
+apply plugin: 'maven-publish'
+
+apply plugin: 'java'
+apply plugin: 'checkstyle'
+apply plugin: 'jacoco'
+apply plugin: 'maven'
+apply plugin: 'com.gorylenko.gradle-git-properties'
+
+ext {
+    libraryVersions = [
+            springBootJerseyVersion: '1.5.1.RELEASE',
+            cucumberJunit          : '1.2.4',
+            cucumberPlugin         : '0.8',
+            cucumberSpring         : '1.2.4',
+            springTest             : '4.3.8.RELEASE',
+            powerMock              : '1.6.6',
+            servletApi             : '3.0.1',
+            junit                  : '4.12',
+            guavaretrying          : '2.0.0',
+            awsSWFBuildTools       : '1.1',
+            awsSWFJavaSdk          : '1.11.22',
+            awsS3JavaSdk           : '1.11.256',
+            aspectj                : '1.6.11',
+            aspectjTools           : '1.8.9',
+            jsonSchemaValidator    : '2.2.8',
+            springTest             : '4.3.8.RELEASE'
+    ]
+}
+
+dependencies {
+    providedRuntime 'org.springframework.boot:spring-boot-starter-tomcat'
+    compile('org.springframework.boot:spring-boot-starter-jersey:' + libraryVersions.springBootJerseyVersion) {
+        exclude module: 'spring-boot-starter-logging'
+    }
+    compile("org.springframework.boot:spring-boot-starter-actuator:" + libraryVersions.springBootJerseyVersion) {
+        exclude module: 'spring-boot-starter-logging'
+    }
+    compile("org.springframework.boot:spring-boot-starter-web:" + libraryVersions.springBootJerseyVersion) {
+        exclude module: 'spring-boot-starter-logging'
+    }
+    compile("org.springframework.boot:spring-boot-starter-hateoas:" + libraryVersions.springBootJerseyVersion) {
+        exclude module: 'spring-boot-starter-logging'
+    }
+
+//AWS SWF Dependencies
+    compile 'com.amazonaws:aws-java-sdk-swf-libraries:' + libraryVersions.awsSWFJavaSdk
+
+    compile 'org.aspectj:aspectjrt:' + libraryVersions.aspectjTools
+    compile 'org.aspectj:aspectjweaver:' + libraryVersions.aspectjTools
+
+    compileOnly 'com.amazonaws:aws-swf-build-tools:' + libraryVersions.awsSWFBuildTools
+    apt 'com.amazonaws:aws-swf-build-tools:' + libraryVersions.awsSWFBuildTools
+    aspects 'com.amazonaws:aws-swf-build-tools:' + libraryVersions.awsSWFBuildTools
+
+    apt 'org.aspectj:aspectjtools:' + libraryVersions.aspectjTools
+    ajc 'org.aspectj:aspectjtools:' + libraryVersions.aspectjTools
+
+//AWS S3 Dependencies
+    compile 'com.amazonaws:aws-java-sdk-s3:' + libraryVersions.awsS3JavaSdk
+
+    workflowTestsCompile 'com.github.samueltbrown:gradle-cucumber-plugin:' + libraryVersions.cucumberPlugin
+    workflowTestsCompile 'com.github.java-json-tools:json-schema-validator:' + libraryVersions.jsonSchemaValidator
+    workflowTestsCompile 'info.cukes:cucumber-java8:' + libraryVersions.cucumberJava
+    workflowTestsCompile 'info.cukes:cucumber-junit:' + libraryVersions.cucumberJunit
+    workflowTestsCompile 'info.cukes:cucumber-spring:' + libraryVersions.cucumberSpring
+    workflowTestsCompile 'org.springframework:spring-test:' + libraryVersions.springTest
+    workflowTestsCompile 'javax.servlet:javax.servlet-api:' + libraryVersions.servletApi
+    workflowTestsCompile('com.github.rholder:guava-retrying:' + libraryVersions.guavaretrying) {
+        changing = true
+    }
+    testCompile 'org.powermock:powermock-core:' + libraryVersions.powerMock
+    testCompile 'org.powermock:powermock-module-junit4:' + libraryVersions.powerMock
+    testCompile 'org.powermock:powermock-api-mockito:' + libraryVersions.powerMock
+    testCompile 'junit:junit:' + libraryVersions.junit
+    testCompile 'org.springframework:spring-test:' + libraryVersions.springTest
+}
+
+/*
+ * Create the directories where the Flow Framework will place its generated code
+ */
+task createGeneratedSrcDirs {
+    def generated = new File('src/main/generated')
+
+    if (!generated.exists()) {
+        generated.mkdirs()
+    }
+}
+
+/*
+ * Make the idea task create the directories for the generated code
+ */
+tasks.idea {
+    dependsOn = [createGeneratedSrcDirs]
+}
+
+idea {
+    module {
+        sourceDirs += file("${projectDir}/src/test-workflows/java")
+        sourceDirs += file('src/main/generated')
+    }
+}
+
+/*
+ * Expose the task definitions for running ajc
+ */
+def aspectj = { destDir, aspectPath, inpath, classpath ->
+    ant.taskdef(resource: "org/aspectj/tools/ant/taskdefs/aspectjTaskdefs.properties",
+            classpath: configurations.ajc.asPath)
+
+    ant.iajc(
+            maxmem: "1024m",
+            fork: "true",
+            Xlint: "ignore",
+            destDir: destDir,
+            aspectPath: aspectPath,
+            inpath: inpath,
+            classpath: classpath,
+            source: project.sourceCompatibility,
+            target: project.targetCompatibility
+    )
+}
+
+/*
+ * Configure build to perform the AspectJ weaving *after* the java compilation is done.
+ */
+compileJava {
+    generatedSourcesDestinationDir = 'src/main/generated'
+    doLast {
+        aspectj project.sourceSets.main.output.classesDir.absolutePath,
+                configurations.aspects.asPath,
+                project.sourceSets.main.output.classesDir.absolutePath,
+                project.sourceSets.main.runtimeClasspath.asPath
+    }
+}
+
+war {
+    rootSpec.exclude "config.properties"
+    archiveName = 'sample-one.war'
+    manifest {
+        attributes("Implementation-Title": project.name,
+                "Implementation-Version": project.version,
+                "Build-Date": new Date(),
+                "Build-Number": System.getenv("BUILD_DISPLAY_NAME") ?: 'Not available')
+    }
+}
+
+springBoot {
+    mainClass = "com.madhu.sample1.Application"
+    buildInfo()
+}
+
+bootRun {
+    jvmArgs = ['-Xdebug', '-Xrunjdwp:server=y,transport=dt_socket,address=9009,suspend=n']
+}
+
+checkstyleMain {
+    source = fileTree(dir: 'src/main', include: '**/*.java', exclude: '**//generated/**')
+}
+
+task restApiDocumentationJar(type: Jar) {
+    from('build/miredot')
+    classifier = 'restApiDocumentation'
+}
+
+publishing.publications {
+    mavenJavaWar(MavenPublication) {
+        from components.web
+        artifact restApiDocumentationJar
+    }
+}
+
+jacocoTestReport {
+    reports {
+        xml {
+            enabled true // coveralls plugin depends on xml format report
+        }
+
+        html {
+            enabled true
+        }
+    }
+
+    afterEvaluate {
+        classDirectories = files(classDirectories.files.collect {
+            fileTree(dir: it,
+                    exclude: ['com/madhu/generated/**'])
+        })
+    }
+}
